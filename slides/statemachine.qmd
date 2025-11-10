@@ -1,0 +1,166 @@
+---
+title: "Integrating a State Machine into FPShooter"
+author: "Luke"
+format:
+  revealjs:
+    slide-level: 3
+    theme: simple
+---
+
+
+# State Machine Refactor
+
+## Context
+### From Script Juggling to Stable States {data-background-color="#1B263B"}
+Today we will refactor `ActiveWeapon` in the FPShooter project so that it relies on a State Machine instead of scattered conditional logic. By the end, you will know why State Machines matter, how to design one for our shooter, and what refactors are required to wire it in cleanly.
+
+### Current Flow Snapshot
+- `ActiveWeapon.Update()` handles shooting and zoom logic directly
+- Cooldowns, ammo checks, and animations intertwine in one method
+- Adding reloads or alternate fire would grow complex fast
+
+### What We Want
+- Clear state boundaries for Idle, Firing, Reloading, and Switching
+- Transitions triggered by player input and weapon data
+- A system we can extend with enemy behavior later
+
+## Pattern Primer
+### Why State Machines are Common in Games {data-background-color="#0F3460"}
+State Machines encapsulate behavior for discrete modes. Each state decides how to react to inputs and when to hand control to another state. This aligns with game loops where characters flip between aiming, firing, or reloading.
+
+### Quick Vocabulary
+- **State**: Behavior class handling lifecycle events (`Enter`, `Update`, `Exit`)
+- **Context**: The object delegating to the current state (`ActiveWeapon`)
+- **Transition**: Condition that swaps the current state reference
+
+### Visualizing the Weapon Flow
+```{mermaid}
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Firing : shoot pressed & ammo > 0
+    Firing --> Idle : fire cooldown finished
+    Firing --> Reloading : ammo == 0
+    Reloading --> Idle : reload animation ends
+    Idle --> Switching : switch input
+    Switching --> Idle : new weapon ready
+```
+
+## Scenario Setup
+### Narrative Hook {data-background-color="#16213E"}
+Imagine demo day: the design team wants burst fire, scoped aim, and cinematic reloads. Our current `ActiveWeapon` would explode with `if` statements. Introducing a State Machine now makes these features manageable for the milestone.
+
+### Inventory of Existing Code
+- `Assets/Scripts/Player/ActiveWeapon.cs` handles update loop
+- `WeaponSO` stores fire rate, magazine size, zoom info
+- Animations use string triggers like `"Shoot"`
+
+### Target Refactor Goals
+- Create `PlayerWeaponStateMachine` MonoBehaviour living beside `ActiveWeapon`
+- Define state interfaces for deterministic transitions
+- Move animation triggers and ammo bookkeeping into state implementations
+
+## Implementation Walkthrough
+### Step 1: Define the Contract {data-background-color="#53354A"}
+Create `Assets/Scripts/Player/StateMachine/WeaponState.cs`:
+```csharp
+namespace FPShooter.Player
+{
+    public abstract class WeaponState
+    {
+        protected readonly PlayerWeaponStateMachine ctx;
+        protected WeaponState(PlayerWeaponStateMachine context) => ctx = context;
+        public virtual void Enter() {}
+        public virtual void Exit() {}
+        public virtual void Tick() {}
+        public virtual void HandleShootInput(bool isPressed) {}
+        public virtual void HandleZoomInput(bool isPressed) {}
+    }
+}
+```
+
+### Step 2: Build the State Machine Shell
+Add `PlayerWeaponStateMachine.cs`:
+```csharp
+public class PlayerWeaponStateMachine : MonoBehaviour
+{
+    public WeaponState CurrentState { get; private set; }
+    public ActiveWeapon ActiveWeapon { get; private set; }
+
+    void Awake()
+    {
+        ActiveWeapon = GetComponent<ActiveWeapon>();
+    }
+
+    void Update()
+    {
+        CurrentState?.Tick();
+    }
+
+    public void SwitchState(WeaponState newState)
+    {
+        CurrentState?.Exit();
+        CurrentState = newState;
+        CurrentState?.Enter();
+    }
+}
+```
+
+### Step 3: Implement Core States
+Create `WeaponIdleState`, `WeaponFiringState`, `WeaponReloadingState`, and `WeaponSwitchingState`. Each inherits `WeaponState` and handles specific transitions such as cooldown timers, ammo restoration, or switching weapons. Inject dependencies (animator, inputs, weapon data) through the context to avoid singletons.
+
+### Step 4: Delegate Input to States
+Modify `ActiveWeapon` so that:
+
+- `Update()` only forwards input to the State Machine (`HandleShootInput`, `HandleZoomInput`)
+- Cooldowns, ammo adjustments, and animation calls move into the relevant state classes
+
+### Step 5: Glue Everything Together
+Instantiate the `PlayerWeaponStateMachine` on the Player prefab, drag references (`StarterAssetsInputs`, `Animator`, `WeaponSO`) onto the new component, and set the initial state to Idle in `Start()`.
+
+## Refactor in Detail
+### Replace Update Logic {data-background-color="#304D63"}
+```csharp
+void Update()
+{
+    stateMachine.HandleShootInput(starterAssetsInputs.shoot);
+    stateMachine.HandleZoomInput(starterAssetsInputs.zoom);
+    stateMachine.Tick();
+}
+```
+
+### Move Ammo Logic into States
+- Idle checks for shoot press and ammo before transitioning to Firing
+- Firing decrements ammo and calls `ctx.ActiveWeapon.PlayShoot()` helper
+- Reloading waits for animation event to refill magazine, then transitions to Idle
+
+### Manage Animations Centrally
+Let each state issue animation triggers in `Enter()` and reset them in `Exit()` so that the controller’s layers stay synchronized with gameplay.
+
+## Validation & Tooling
+### Testing Strategy {data-background-color="#3A363B"}
+- Scene Smoke Test: confirm shooting, zooming, reloading behave identically post-refactor
+- Unit Test Option: script edit mode tests that simulate state transitions by toggling inputs and asserting on `CurrentState`
+- Debug HUD: add an optional `TMP_Text` bound to the current state name for quick QA
+
+### Editor Tips
+- Use Unity’s Animator window to tie animation events (e.g., `OnReloadComplete`) back to state transitions
+- Expose timers (fire cooldown, reload duration) in the inspector for tuning without code changes
+
+## Extension Paths
+### Beyond the Basics {data-background-color="#521262"}
+- Add `WeaponOverheatState` for energy weapons
+- Reuse the pattern for `EnemyAIStateMachine` with Patrol, Chase, Attack states
+- Layer in network replication by serializing state transitions for multiplayer
+
+### Student Challenge
+- Implement a `WeaponJamState` that forces the player to tap reload to clear the jam
+- Document new transitions in the Mermaid diagram and share with your pod
+
+### Wrap Up
+- State Machines convert conditional chaos into maintainable, testable code
+- The FPShooter project now has a blueprint for future features
+- Keep the pattern handy for UI flows, enemy AI, and mission scripting
+
+
+
+
