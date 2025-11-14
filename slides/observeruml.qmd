@@ -1,0 +1,92 @@
+## Before Refactor: Tight Coupling
+
+```{mermaid}
+classDiagram
+    class PlayerHealth {
+        +ApplyDamage()
+        +Heal()
+        +ResetHealth()
+        +PlayerGameOver()
+        -HudHealthWidget hud
+        -DamageVignette damageVignette
+        -RumbleDriver rumbleDriver
+        -MatchTelemetryReporter telemetry
+    }
+
+    class HudHealthWidget {
+        +UpdateHealth()
+    }
+
+    class DamageVignette {
+        +ShowDamage()
+    }
+
+    class RumbleDriver {
+        +PlayRumble()
+    }
+
+    class MatchTelemetryReporter {
+        +RecordHealthEvent()
+    }
+
+    PlayerHealth --> HudHealthWidget : direct method call
+    PlayerHealth --> DamageVignette : direct method call
+    PlayerHealth --> RumbleDriver : direct method call
+    PlayerHealth --> MatchTelemetryReporter : direct method call
+```
+
+## After Refactor: Observer Pattern
+
+```{mermaid}
+classDiagram
+    class IHealthSubject {
+        <<interface>>
+        +Register(IHealthObserver)
+        +Unregister(IHealthObserver)
+    }
+
+    class IHealthObserver {
+        <<interface>>
+        +OnHealthChanged(HealthChangePayload)
+    }
+
+    class HealthChangePayload {
+        +PlayerHealth Subject
+        +int PreviousHealth
+        +int CurrentHealth
+        +int Delta
+        +DamageType Cause
+    }
+
+    class PlayerHealth {
+        +Register(IHealthObserver)
+        +Unregister(IHealthObserver)
+        -List~IHealthObserver~ observers
+        -void NotifyObservers(...)
+    }
+
+    class HudHealthWidget {
+        +OnHealthChanged(HealthChangePayload)
+    }
+
+    class DamageVignette {
+        +OnHealthChanged(HealthChangePayload)
+    }
+
+    class RumbleDriver {
+        +OnHealthChanged(HealthChangePayload)
+    }
+
+    class MatchTelemetryReporter {
+        +OnHealthChanged(HealthChangePayload)
+    }
+
+    IHealthSubject <|.. PlayerHealth
+    IHealthObserver <|.. HudHealthWidget
+    IHealthObserver <|.. DamageVignette
+    IHealthObserver <|.. RumbleDriver
+    IHealthObserver <|.. MatchTelemetryReporter
+    PlayerHealth o--> "observers" IHealthObserver
+    PlayerHealth --> HealthChangePayload : notifies with
+```
+
