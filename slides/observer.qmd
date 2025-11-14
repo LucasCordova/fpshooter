@@ -1,0 +1,183 @@
+---
+title: "Observer Pattern for FPShooter"
+author: "Lecture Notes"
+format:
+  revealjs:
+    theme: [simple]
+    slide-number: true
+    code-line-numbers: false
+---
+
+## <span style="background-color:#0A9396;color:#ffffff;padding:6px 10px;border-radius:4px;">Setting the Stage</span>
+
+### Situation Briefing
+
+In `FPShooter`, we want to demo software design patterns by extending our first-person shooter mechanics.
+
+- Core pillars: responsiveness, modularity, testability; each sprint adds new feedback systems that pile on PlayerHealth
+- Unity provides a built-in event system, but it's not a formal Observer pattern.
+- Today’s goal: convert ad-hoc method calls into a broadcast model.
+
+### Scenario: Tactical HUD Awareness
+
+Multiple subsystems react to the player’s health. At the moment, `PlayerHealth` directly pokes UI, audio, AI, and analytics objects, producing a brittle web of dependencies.
+
+- Health bar animation
+- Controller rumble
+- Screen shake
+- Audio feedback
+- AI threat level
+- Telemetry events
+- Temporary shield pickup
+- Enemy death effects
+- ... and more
+
+## <span style="background-color:#BB3E03;color:#ffffff;padding:6px 10px;border-radius:4px;">Observer Primer</span>
+
+### Pattern Recap
+
+Observer Pattern definition: maintain a Subject that owns state and notifies many Observers whenever that state changes, decoupling publisher from subscribers.
+
+- Subject: entity with interesting state (`PlayerHealth`)
+- Observer: anything that reacts (`HudHealthWidget`, `DamageVignette`, `RumbleDriver`, `AnalyticsReporter`)
+- Contract: subscribe, unsubscribe, receive notifications
+
+### Why It Matters Here
+
+Design goals for FPShooter:
+
+- Swap HUD styles without touching core combat code
+- Allow designers to add new feedback systems without code surgery
+- Improve Play Mode testability (mock observers)
+
+## <span style="background-color:#005F73;color:#ffffff;padding:6px 10px;border-radius:4px;">Codebase Touchpoints</span>
+
+### Files to Visit
+
+- `Assets/Scripts/Combat/PlayerHealth.cs`
+- `Assets/Scripts/UI/HudHealthWidget.cs`
+- `Assets/Scripts/FX/DamageVignette.cs`
+- `Assets/Scripts/Input/RumbleDriver.cs`
+- `Assets/Scripts/Analytics/MatchTelemetryReporter.cs`
+
+### Current Flow Snapshot
+
+```{mermaid}
+flowchart LR
+    PlayerHealth -->|Direct Method Call| HudHealthWidget
+    PlayerHealth --> DamageVignette
+    PlayerHealth --> RumbleDriver
+    PlayerHealth --> MatchTelemetryReporter
+```
+
+Pain point: each new listener forces `PlayerHealth` to import more namespaces and know more behaviours.
+
+## <span style="background-color:#AE2012;color:#ffffff;padding:6px 10px;border-radius:4px;">Integration Plan</span>
+
+### Step 1: Define Contracts
+
+Create `IHealthObserver` and `IHealthSubject` interfaces inside `Assets/Scripts/Combat/HealthEvents.cs`.
+
+- `IHealthObserver` exposes `OnHealthChanged(float current, float delta, DamageType cause)`
+- `IHealthSubject` exposes `Register`, `Unregister`, `Notify`
+- Keep interfaces assembly-wide so designers can implement observers in other folders
+- Add XML doc comments so tooltips explain intent directly in Rider/VS
+- Include a lightweight `HealthChangePayload` struct (current, previous, delta, cause) to future-proof signatures
+
+### Step 2: Upgrade PlayerHealth
+
+Modify `PlayerHealth` to implement `IHealthSubject`.
+
+- Replace direct component references with a `List<IHealthObserver>`
+- Add serialized default observers array plus a `bool autoRegisterInspectorObservers`
+- Emit notifications inside `ApplyDamage`, `Heal`, respawn, and `SetInvulnerable` toggles
+- Guard against duplicate registrations and prune destroyed observers before notifying
+
+### Step 3: Convert Observers
+
+Each system implements `IHealthObserver`.
+
+- `HudHealthWidget` updates fill and color
+- `DamageVignette` triggers screen overlay intensity
+- `RumbleDriver` maps delta to vibration strength
+- `MatchTelemetryReporter` logs events asynchronously
+- `SquadThreatController` scales ally chatter volume when player health is critical
+
+### Step 4: Bootstrap Subscriptions
+
+Two options for hooking observers:
+
+- Editor workflow: assign observer MonoBehaviours to `PlayerHealth` list via inspector
+- Runtime workflow: systems call `playerHealth.Register(this)` in `Start` and unregister in `OnDestroy`
+- Hybrid workflow: inspector wires baseline observers, runtime-only pickups (temporary shields) self-register on spawn
+
+### Step 5: Testing
+
+- Write PlayMode test that swaps in a fake observer recording notifications
+- Simulate damage sequence, assert expected health values and order
+- Add automated test ensuring `Unregister` during notification does not throw by iterating over a shallow copy
+
+## <span style="background-color:#CA6702;color:#ffffff;padding:6px 10px;border-radius:4px;">Refactoring Walkthrough</span>
+
+### Before/After Snippet
+
+```{csharp}
+// Before
+public void ApplyDamage(float amount) {
+    current -= amount;
+    hud.UpdateHealth(current);
+    vignette.ShowDamage();
+}
+```
+
+```{csharp}
+// After
+public void ApplyDamage(float amount) {
+    current -= amount;
+    NotifyObservers(current, -amount, DamageType.Bullet);
+}
+```
+
+Result: `PlayerHealth` now stops caring who listens; students see an immediate deletion diff of cross-component references.
+
+### Observer Example
+
+```{csharp}
+public class HudHealthWidget : MonoBehaviour, IHealthObserver {
+    public void OnHealthChanged(float current, float delta, DamageType cause) {
+        healthFill.fillAmount = current / max;
+        animator.SetTrigger(delta < 0 ? "Damage" : "Heal");
+    }
+}
+```
+
+### Subscription Lifecycle
+
+```{csharp}
+public class HudHealthWidget : MonoBehaviour {
+    [SerializeField] PlayerHealth playerHealth;
+
+    void OnEnable() => playerHealth.Register(this);
+    void OnDisable() => playerHealth.Unregister(this);
+}
+```
+
+## <span style="background-color:#0A9396;color:#ffffff;padding:6px 10px;border-radius:4px;">Live Demo Script</span>
+
+### Walkthrough
+
+- Load `Assets/Scenes/MainLevel.unity`, select the `Player` prefab, and expand `PlayerHealth` which shows serialized references (`HudHealthWidget`, `DamageVignette`, etc.) (to expose tight coupling).
+- Open `Assets/Scripts/Combat` in the Project panel, create `HealthEvents.cs`, and code `IHealthSubject`, `IHealthObserver`, and a `HealthChangePayload`. 
+- Switch to `PlayerHealth.cs`: delete the serialized HUD/FX fields, add `List<IHealthObserver> observers`, implement `Register`, `Unregister`, `NotifyObservers`, and call notify inside `ApplyDamage`, `Heal`, and `ResetHealth`.
+- Now implement inspector-driven wiring by adding a `[SerializeField] MonoBehaviour[] defaultObservers;` array, auto-register them in `Awake`, and drag existing HUD/Rumble objects into the list.
+- Convert `HudHealthWidget.cs`: implement `IHealthObserver`, move the fill logic into `OnHealthChanged`, and hook registration in `OnEnable/OnDisable`. Hit Play and shoot the player via the debug console (`player.ApplyDamage(25f);`) to prove HUD updates via observers.
+- Add a brand-new script `ScreenShakeOnHealthDrop.cs` (in `Assets/Scripts/FX`), implement `IHealthObserver` that fires a Cinemachine impulse when `delta < 0`, drop it on the camera rig, register it, and see the screen shake in action.
+
+### Change List
+
+- `Assets/Scripts/Combat/HealthEvents.cs`: new interfaces plus `HealthChangePayload`
+- `Assets/Scripts/Combat/PlayerHealth.cs`: implements subject logic, serialized default observers, guard clauses in `NotifyObservers`
+- `Assets/Scripts/UI/HudHealthWidget.cs`: implements observer, handles lifecycle registration, no direct player dependency
+- `Assets/Scripts/FX/ScreenShakeOnHealthDrop.cs`: new observer example with Cinemachine impulse
+- `Assets/Scenes/MainLevel.unity`: inspector wiring for PlayerHealth observers list and new screen shake component
+
